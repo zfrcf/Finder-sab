@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SoloCheat | Brainrot Finder</title>
+    <style>
+        body { background: #0f0f0f; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; }
+        .container { max-width: 800px; margin: auto; }
+        .server-card { background: #1a1a1a; border: 1px solid #ff0050; padding: 20px; border-radius: 10px; margin: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .btn-join { background: #ff0050; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; }
+        .gps { color: #00ff80; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 Live Brainrot Finder</h1>
+        <div id="server-list">Chargement des meilleurs serveurs...</div>
+    </div>
+
+    <script>
+        async function fetchServers() {
+            const res = await fetch('/api/get-servers');
+            const data = await res.json();
+            const list = document.getElementById('server-list');
+            list.innerHTML = '';
+            
+            data.forEach(srv => {
+                list.innerHTML += `
+                    <div class="server-card">
+                        <div>
+                            <h3>${srv.brainrotName}</h3>
+                            <p class="gps">Gain: ${srv.gps} $/sec</p>
+                        </div>
+                        <a href="roblox://placeId=${srv.placeId}&gameInstanceId=${srv.jobId}" class="btn-join">JOIN SERVER</a>
+                    </div>
+                `;
+            });
+        }
+        setInterval(fetchServers, 5000); // Actualise toutes les 5 sec
+        fetchServers();
+    </script>
+</body>
+</html>
