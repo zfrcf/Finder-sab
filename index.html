@@ -1,41 +1,107 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SoloCheat | Brainrot Finder</title>
+    <title>SoloCheat | Brainrot Finder & Loader</title>
     <style>
-        body { background: #0f0f0f; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; }
-        .container { max-width: 800px; margin: auto; }
-        .server-card { background: #1a1a1a; border: 1px solid #ff0050; padding: 20px; border-radius: 10px; margin: 10px; display: flex; justify-content: space-between; align-items: center; }
-        .btn-join { background: #ff0050; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; }
-        .gps { color: #00ff80; font-weight: bold; }
+        body { background: #0f0f0f; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: auto; text-align: center; }
+        
+        /* Section Loadstring */
+        .loader-box { 
+            background: linear-gradient(145deg, #1a1a1a, #111); 
+            border: 2px solid #ff0050; 
+            padding: 25px; 
+            border-radius: 15px; 
+            margin-bottom: 30px;
+            box-shadow: 0 0 15px rgba(255, 0, 80, 0.2);
+        }
+        .copy-btn { 
+            background: #ff0050; color: white; border: none; padding: 12px 25px; 
+            border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px;
+            transition: 0.3s; margin-top: 10px;
+        }
+        .copy-btn:hover { background: #ff3370; transform: scale(1.05); }
+        .copy-btn:active { transform: scale(0.95); }
+
+        /* Liste des Serveurs */
+        .server-card { 
+            background: #1a1a1a; border-left: 5px solid #ff0050; 
+            padding: 20px; border-radius: 8px; margin: 15px 0; 
+            display: flex; justify-content: space-between; align-items: center; 
+            text-align: left;
+        }
+        .btn-join { background: #00ff80; color: #000; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; }
+        .gps { color: #00ff80; font-size: 1.2em; font-weight: bold; }
+        code { background: #000; padding: 5px 10px; border-radius: 5px; color: #ccc; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🧠 Live Brainrot Finder</h1>
-        <div id="server-list">Chargement des meilleurs serveurs...</div>
+        <h1>🚀 SOLOCHEAT</h1>
+        
+        <div class="loader-box">
+            <h2>Lancer le Script</h2>
+            <p>Copie ce code et colle-le dans ton exécuteur :</p>
+            <code>loadstring(game:HttpGet("https://pastebin.com/raw/DH0qgkA1"))()</code>
+            <br>
+            <button class="copy-btn" onclick="copyScript()">📋 COPIER LE LOADSTRING</button>
+        </div>
+
+        <hr style="border: 0.5px solid #333; margin: 40px 0;">
+
+        <h2>🧠 Live Brainrot Finder</h2>
+        <div id="server-list">Recherche de serveurs rentables...</div>
     </div>
 
     <script>
-        async function fetchServers() {
-            const res = await fetch('/api/get-servers');
-            const data = await res.json();
-            const list = document.getElementById('server-list');
-            list.innerHTML = '';
+        // Fonction pour copier le lien
+        function copyScript() {
+            const script = 'loadstring(game:HttpGet("https://pastebin.com/raw/DH0qgkA1"))()';
+            navigator.clipboard.writeText(script);
             
-            data.forEach(srv => {
-                list.innerHTML += `
-                    <div class="server-card">
-                        <div>
-                            <h3>${srv.brainrotName}</h3>
-                            <p class="gps">Gain: ${srv.gps} $/sec</p>
-                        </div>
-                        <a href="roblox://placeId=${srv.placeId}&gameInstanceId=${srv.jobId}" class="btn-join">JOIN SERVER</a>
-                    </div>
-                `;
-            });
+            const btn = document.querySelector('.copy-btn');
+            btn.innerText = '✅ COPIÉ !';
+            btn.style.background = '#00ff80';
+            btn.style.color = '#000';
+            
+            setTimeout(() => {
+                btn.innerText = '📋 COPIER LE SCRIPT';
+            btn.style.background = '#ff0050';
+                btn.style.color = 'white';
+            }, 2000);
         }
-        setInterval(fetchServers, 5000); // Actualise toutes les 5 sec
+
+        // Récupération des serveurs depuis l'API Vercel
+        async function fetchServers() {
+            try {
+                const res = await fetch('/api/webhook'); // Ton point d'entrée GET sur Vercel
+                const data = await res.json();
+                const list = document.getElementById('server-list');
+                
+                if (data.length === 0) {
+                    list.innerHTML = "<p style='color:#666'>Aucun serveur détecté pour le moment...</p>";
+                    return;
+                }
+
+                list.innerHTML = '';
+                data.forEach(srv => {
+                    list.innerHTML += `
+                        <div class="server-card">
+                            <div>
+                                <h3 style="margin:0">${srv.brainrotName}</h3>
+                                <p class="gps">${srv.gps} $/sec</p>
+                                <small style="color:#666">ID: ${srv.jobId.substring(0,15)}...</small>
+                            </div>
+                            <a href="roblox://placeId=${srv.placeId}&gameInstanceId=${srv.jobId}" class="btn-join">JOIN SERVER</a>
+                        </div>
+                    `;
+                });
+            } catch (e) {
+                console.log("En attente de données...");
+            }
+        }
+
+        setInterval(fetchServers, 5000);
         fetchServers();
     </script>
 </body>
