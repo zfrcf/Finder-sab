@@ -27,42 +27,125 @@
 
   const setStatus = (msg) => { els.status.textContent = msg; };
 
-  if (!synth) {
-    setStatus("Votre navigateur ne prend pas en charge la synthèse vocale. Essayez Chrome, Edge ou Safari.");
-  }
-
   /* ---------- Voix ---------- */
 
+  // Voix neuronales Piper : générées dans le navigateur, gratuites, bien plus naturelles.
+  const AI_VOICES = [
+    { id: "fr_FR-siwis-medium", label: "Siwis — voix féminine naturelle" },
+    { id: "fr_FR-tom-medium", label: "Tom — voix masculine naturelle" },
+    { id: "fr_FR-upmc-medium", label: "UPMC — voix féminine posée" },
+  ];
+  const DEFAULT_VOICE = "ia:" + AI_VOICES[0].id;
+
   function loadVoices() {
-    if (!synth) return;
-    const voices = synth.getVoices();
-    if (!voices.length) {
-      els.voice.innerHTML = '<option value="">Voix par défaut du navigateur</option>';
-      return;
-    }
-    const saved = store.get("voix");
-    const sorted = [...voices].sort((a, b) => {
-      const fa = a.lang.toLowerCase().startsWith("fr") ? 0 : 1;
-      const fb = b.lang.toLowerCase().startsWith("fr") ? 0 : 1;
-      return fa - fb || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name);
-    });
+    const saved = store.get("voix") || els.voice.value || DEFAULT_VOICE;
     els.voice.innerHTML = "";
-    for (const v of sorted) {
-      const opt = document.createElement("option");
-      opt.value = v.voiceURI;
-      opt.textContent = `${v.name} (${v.lang})`;
-      els.voice.appendChild(opt);
+
+    const aiGroup = document.createElement("optgroup");
+    aiGroup.label = "Voix IA naturelles (recommandé)";
+    for (const v of AI_VOICES) aiGroup.appendChild(new Option(v.label, "ia:" + v.id));
+    els.voice.appendChild(aiGroup);
+
+    const voices = synth ? synth.getVoices() : [];
+    if (voices.length) {
+      const sorted = [...voices].sort((a, b) => {
+        const fa = a.lang.toLowerCase().startsWith("fr") ? 0 : 1;
+        const fb = b.lang.toLowerCase().startsWith("fr") ? 0 : 1;
+        return fa - fb || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name);
+      });
+      const webGroup = document.createElement("optgroup");
+      webGroup.label = "Voix du navigateur (instantanées)";
+      for (const v of sorted) webGroup.appendChild(new Option(`${v.name} (${v.lang})`, "web:" + v.voiceURI));
+      els.voice.appendChild(webGroup);
     }
-    const fallback = sorted.find((v) => v.lang.toLowerCase().startsWith("fr")) || sorted[0];
-    els.voice.value = sorted.some((v) => v.voiceURI === saved) ? saved : fallback.voiceURI;
+
+    const values = [...els.voice.options].map((o) => o.value);
+    els.voice.value = values.includes(saved) ? saved : DEFAULT_VOICE;
+    syncPitch();
   }
 
-  if (synth) {
-    loadVoices();
-    synth.addEventListener?.("voiceschanged", loadVoices);
+  const isAiVoice = () => els.voice.value.startsWith("ia:");
+  const aiVoiceId = () => els.voice.value.slice(3);
+  const selectedWebVoice = () => synth?.getVoices().find((v) => "web:" + v.voiceURI === els.voice.value);
+
+  loadVoices();
+  synth?.addEventListener?.("voiceschanged", loadVoices);
+
+  // La tonalité n'est réglable qu'avec les voix du navigateur.
+  function syncPitch() {
+    const off = isAiVoice();
+    els.pitch.disabled = off;
+    els.pitch.closest("label").classList.toggle("off", off);
   }
 
-  const selectedVoice = () => synth.getVoices().find((v) => v.voiceURI === els.voice.value);
+  /* ---------- Moteur IA (Piper) ---------- */
+
+  const ORT_DIST = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
+  const PIPER_URL = "https://cdn.jsdelivr.net/npm/@mintplex-labs/piper-tts-web@1.0.5/dist/piper-tts-web.js";
+
+  const ai = {
+    lib: null,
+    tts: null,
+    voiceId: null,
+    loading: null,
+    queue: Promise.resolve(),
+    gen: 0,           // invalide les générations en attente quand le texte ou la voix change
+    cache: new Map(), // index de phrase -> Promise<URL audio>
+  };
+
+  // Charge (ou change) la voix IA ; le modèle est mis en cache par le navigateur après le 1er téléchargement.
+  function loadAiVoice(voiceId) {
+    if (ai.tts && ai.voiceId === voiceId) return Promise.resolve(ai.tts);
+    if (ai.loading && ai.voiceId === voiceId) return ai.loading;
+    ai.voiceId = voiceId;
+    ai.loading = (async () => {
+      setStatus("Chargement de la voix IA…");
+      ai.lib = ai.lib || await import(PIPER_URL);
+      const { TtsSession } = ai.lib;
+      // La session est un singleton : on la réinitialise pour changer de voix.
+      TtsSession._instance = null;
+      const tts = await TtsSession.create({
+        voiceId,
+        wasmPaths: { ...TtsSession.WASM_LOCATIONS, onnxWasm: ORT_DIST },
+        progress: (p) => {
+          if (p.total && p.url.endsWith(".onnx")) {
+            setStatus(`Téléchargement de la voix IA… ${Math.round((p.loaded / p.total) * 100)} % (une seule fois)`);
+          }
+        },
+      });
+      if (ai.voiceId === voiceId) ai.tts = tts;
+      return tts;
+    })();
+    ai.loading.catch(() => { if (ai.voiceId === voiceId) { ai.loading = null; ai.voiceId = null; } });
+    return ai.loading;
+  }
+
+  // Génère l'audio d'une phrase ; les générations passent une par une dans une file.
+  function synthesize(i) {
+    if (ai.cache.has(i)) return ai.cache.get(i);
+    const voiceId = aiVoiceId();
+    const text = sentences[i].text;
+    const gen = ai.gen;
+    const job = ai.queue.then(async () => {
+      if (gen !== ai.gen) throw new Error("annulé");
+      const tts = await loadAiVoice(voiceId);
+      const wav = await tts.predict(text);
+      return URL.createObjectURL(wav);
+    });
+    ai.queue = job.catch(() => {});
+    ai.cache.set(i, job);
+    job.catch(() => ai.cache.delete(i));
+    return job;
+  }
+
+  function clearAiCache() {
+    for (const p of ai.cache.values()) p.then((url) => URL.revokeObjectURL(url), () => {});
+    ai.cache.clear();
+    ai.gen++;
+  }
+
+  const audio = new Audio();
+  audio.preservesPitch = true;
 
   /* ---------- Réglages ---------- */
 
@@ -71,12 +154,19 @@
     if (saved) input.value = saved;
     const sync = () => { out.textContent = fmt(+input.value); store.set(key, input.value); };
     input.addEventListener("input", sync);
-    input.addEventListener("change", restartIfPlaying);
+    input.addEventListener("change", () => { if (!isAiVoice()) restartIfPlaying(); });
     sync();
   }
   initRange(els.rate, els.rateOut, "vitesse", (v) => v.toFixed(1) + "×");
   initRange(els.pitch, els.pitchOut, "tonalite", (v) => v.toFixed(1));
-  els.voice.addEventListener("change", () => { store.set("voix", els.voice.value); restartIfPlaying(); });
+  els.voice.addEventListener("change", () => {
+    store.set("voix", els.voice.value);
+    clearAiCache();
+    syncPitch();
+    restartIfPlaying();
+  });
+  // Avec la voix IA, la vitesse s'applique en direct sans relancer la phrase.
+  els.rate.addEventListener("input", () => { audio.playbackRate = +els.rate.value; });
 
   function restartIfPlaying() {
     if (playing) speakFrom(current);
@@ -170,6 +260,7 @@
 
   function render(pages) {
     stopReading();
+    clearAiCache();
     sentences = [];
     current = 0;
     els.reader.innerHTML = "";
@@ -220,7 +311,7 @@
   }
 
   function updateUi() {
-    const has = sentences.length > 0 && !!synth;
+    const has = sentences.length > 0;
     els.play.disabled = !has || playing;
     els.pause.disabled = !playing;
     els.stop.disabled = !has || (!playing && current === 0);
@@ -232,38 +323,76 @@
   /* ---------- Lecture ---------- */
 
   function speakFrom(i) {
-    if (!synth || !sentences.length) return;
+    if (!sentences.length) return;
     current = Math.max(0, Math.min(i, sentences.length - 1));
     const id = ++session;
-    synth.cancel();
+    synth?.cancel();
+    audio.pause();
     playing = true;
     updateUi();
     speakCurrent(id);
   }
 
+  function finished() {
+    playing = false;
+    current = 0;
+    highlight(-1);
+    els.bar.style.width = "100%";
+    setStatus("Lecture terminée.");
+    updateUi();
+  }
+
+  function failed(msg) {
+    playing = false;
+    setStatus(msg);
+    updateUi();
+  }
+
   function speakCurrent(id) {
     if (id !== session) return;
-    if (current >= sentences.length) {
-      playing = false;
-      current = 0;
-      highlight(-1);
-      els.bar.style.width = "100%";
-      setStatus("Lecture terminée.");
-      updateUi();
-      return;
-    }
+    if (current >= sentences.length) return finished();
     highlight(current);
+    if (isAiVoice()) speakAi(id);
+    else speakWeb(id);
+  }
+
+  async function speakAi(id) {
+    const i = current;
+    const pending = synthesize(i);
+    // Prépare les deux phrases suivantes pendant la lecture de celle-ci.
+    for (let k = i + 1; k <= i + 2 && k < sentences.length; k++) synthesize(k);
+    let url;
+    try {
+      url = await pending;
+    } catch (err) {
+      if (id !== session) return;
+      console.error(err);
+      return failed("Impossible de charger la voix IA. Vérifiez votre connexion ou choisissez une voix du navigateur.");
+    }
+    if (id !== session) return;
+    setStatus(`Lecture… phrase ${i + 1} / ${sentences.length}`);
+    audio.src = url;
+    audio.playbackRate = +els.rate.value;
+    audio.onended = () => { if (id === session) { current++; speakCurrent(id); } };
+    audio.onerror = () => { if (id === session) failed("Erreur de lecture audio."); };
+    try {
+      await audio.play();
+    } catch (err) {
+      if (id === session && err.name !== "AbortError") failed("Lecture bloquée par le navigateur : cliquez sur « Lire ».");
+    }
+  }
+
+  function speakWeb(id) {
+    if (!synth) return failed("Votre navigateur ne prend pas en charge la synthèse vocale. Choisissez une voix IA.");
     const u = new SpeechSynthesisUtterance(sentences[current].text);
-    const v = selectedVoice();
+    const v = selectedWebVoice();
     if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "fr-FR"; }
     u.rate = +els.rate.value;
     u.pitch = +els.pitch.value;
     u.onend = () => { if (id === session) { current++; speakCurrent(id); } };
     u.onerror = (e) => {
       if (id !== session || e.error === "interrupted" || e.error === "canceled") return;
-      setStatus("Erreur de synthèse vocale : " + e.error);
-      playing = false;
-      updateUi();
+      failed("Erreur de synthèse vocale : " + e.error);
     };
     setStatus(`Lecture… phrase ${current + 1} / ${sentences.length}`);
     // Petit délai : évite que Chrome ignore un énoncé lancé juste après cancel().
@@ -272,7 +401,8 @@
 
   function pauseReading() {
     session++;
-    synth.cancel();
+    synth?.cancel();
+    audio.pause();
     playing = false;
     setStatus(`En pause à la phrase ${current + 1} / ${sentences.length}.`);
     updateUi();
@@ -281,6 +411,7 @@
   function stopReading() {
     session++;
     synth?.cancel();
+    audio.pause();
     playing = false;
     current = 0;
     if (sentences.length) highlight(-1);
@@ -321,7 +452,11 @@
     try {
       const pages = await extractPdf(file);
       render(pages);
-      if (sentences.length) setStatus(`${sentences.length} phrases prêtes. Cliquez sur « Lire ».`);
+      if (sentences.length) {
+        setStatus(`${sentences.length} phrases prêtes. Cliquez sur « Lire ».`);
+        // Prépare la voix IA et la 1re phrase en avance pour un démarrage immédiat.
+        if (isAiVoice()) synthesize(0).then(() => { if (!playing) setStatus(`${sentences.length} phrases prêtes. Cliquez sur « Lire ».`); }, () => {});
+      }
       else setStatus("Aucun texte trouvé dans ce PDF.");
     } catch (err) {
       console.error(err);

@@ -8,6 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "onnxruntime-web/wasm": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.mjs" } }
+  </script>
 </head>
 <body>
   <header class="top">
@@ -59,7 +62,7 @@
     </section>
   </main>
 
-  <footer class="foot">La lecture utilise la synthèse vocale de votre navigateur : le fichier ne quitte jamais votre appareil.</footer>
+  <footer class="foot">Les voix IA sont générées directement dans votre navigateur (téléchargées une seule fois, environ 60 Mo) : votre fichier ne quitte jamais votre appareil.</footer>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="app.js"></script>

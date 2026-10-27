@@ -68,6 +68,7 @@ select {
   border: 1px solid var(--line); background: var(--bg); color: var(--text); min-width: 0;
 }
 input[type=range] { width: 100%; accent-color: var(--accent); }
+.settings label.off { opacity: .45; }
 .progress { height: 4px; background: var(--line); border-radius: 4px; overflow: hidden; }
 #bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 
