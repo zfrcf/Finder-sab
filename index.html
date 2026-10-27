@@ -1,108 +1,67 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-    <title>SoloCheat | Brainrot Finder & Loader</title>
-    <style>
-        body { background: #0f0f0f; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
-        .container { max-width: 900px; margin: auto; text-align: center; }
-        
-        /* Section Loadstring */
-        .loader-box { 
-            background: linear-gradient(145deg, #1a1a1a, #111); 
-            border: 2px solid #ff0050; 
-            padding: 25px; 
-            border-radius: 15px; 
-            margin-bottom: 30px;
-            box-shadow: 0 0 15px rgba(255, 0, 80, 0.2);
-        }
-        .copy-btn { 
-            background: #ff0050; color: white; border: none; padding: 12px 25px; 
-            border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px;
-            transition: 0.3s; margin-top: 10px;
-        }
-        .copy-btn:hover { background: #ff3370; transform: scale(1.05); }
-        .copy-btn:active { transform: scale(0.95); }
-
-        /* Liste des Serveurs */
-        .server-card { 
-            background: #1a1a1a; border-left: 5px solid #ff0050; 
-            padding: 20px; border-radius: 8px; margin: 15px 0; 
-            display: flex; justify-content: space-between; align-items: center; 
-            text-align: left;
-        }
-        .btn-join { background: #00ff80; color: #000; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; }
-        .gps { color: #00ff80; font-size: 1.2em; font-weight: bold; }
-        code { background: #000; padding: 5px 10px; border-radius: 5px; color: #ccc; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecteur PDF à voix haute</title>
+  <meta name="description" content="Déposez un PDF, le site lit son texte à voix haute.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 SOLOCHEAT</h1>
-        
-        <div class="loader-box">
-            <h2>Lancer le Script</h2>
-            <p>Copie ce code et colle-le dans ton exécuteur :</p>
-            <code>loadstring(game:HttpGet("https://pastebin.com/raw/DH0qgkA1"))()</code>
-            <br>
-            <button class="copy-btn" onclick="copyScript()">📋 COPIER LE LOADSTRING</button>
-        </div>
+  <header class="top">
+    <h1>Lecteur PDF à voix haute</h1>
+    <p class="sub">Déposez un PDF : son texte s'affiche et peut être lu à voix haute, phrase par phrase.</p>
+  </header>
 
-        <hr style="border: 0.5px solid #333; margin: 40px 0;">
+  <main class="wrap">
+    <label id="drop" class="drop" for="file">
+      <input id="file" type="file" accept="application/pdf,.pdf" hidden>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg>
+      <strong>Glissez un PDF ici</strong>
+      <span>ou cliquez pour choisir un fichier</span>
+      <span id="fileName" class="file-name"></span>
+    </label>
 
-        <h2>🧠 Live Brainrot Finder</h2>
-        <div id="server-list">Recherche de serveurs rentables...</div>
-    </div>
+    <p id="status" class="status" role="status"></p>
 
-    <script>
-        // Fonction pour copier le lien
-        function copyScript() {
-            const script = 'loadstring(game:HttpGet("https://pastebin.com/raw/DH0qgkA1"))()';
-            navigator.clipboard.writeText(script);
-            
-            const btn = document.querySelector('.copy-btn');
-            btn.innerText = '✅ COPIÉ !';
-            btn.style.background = '#00ff80';
-            btn.style.color = '#000';
-            
-            setTimeout(() => {
-                btn.innerText = '📋 COPIER LE SCRIPT';
-            btn.style.background = '#ff0050';
-                btn.style.color = 'white';
-            }, 2000);
-        }
+    <section class="controls" aria-label="Commandes de lecture">
+      <div class="buttons">
+        <button id="play" class="primary" disabled>▶ Lire</button>
+        <button id="pause" disabled>⏸ Pause</button>
+        <button id="stop" disabled>⏹ Arrêter</button>
+        <button id="prev" disabled title="Phrase précédente">⏮</button>
+        <button id="next" disabled title="Phrase suivante">⏭</button>
+      </div>
+      <div class="settings">
+        <label>Voix
+          <select id="voice"></select>
+        </label>
+        <label>Vitesse <output id="rateOut">1.0×</output>
+          <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
+        </label>
+        <label>Tonalité <output id="pitchOut">1.0</output>
+          <input id="pitch" type="range" min="0.5" max="1.5" step="0.1" value="1">
+        </label>
+      </div>
+      <div class="progress"><div id="bar"></div></div>
+    </section>
 
-        // Récupération des serveurs depuis l'API Vercel
-        async function fetchServers() {
-            try {
-                const res = await fetch('/api/webhook'); // Ton point d'entrée GET sur Vercel
-                const data = await res.json();
-                const list = document.getElementById('server-list');
-                
-                if (data.length === 0) {
-                    list.innerHTML = "<p style='color:#666'>Aucun serveur détecté pour le moment...</p>";
-                    return;
-                }
+    <section class="text-zone">
+      <div class="text-head">
+        <h2>Texte</h2>
+        <button id="editToggle" class="ghost">Modifier / coller du texte</button>
+      </div>
+      <p class="hint">Astuce : cliquez sur une phrase pour lancer la lecture à partir de là.</p>
+      <div id="reader" class="reader" aria-live="off"><p class="empty">Aucun texte pour l'instant.</p></div>
+      <textarea id="editor" class="editor" hidden placeholder="Collez ou modifiez votre texte ici…"></textarea>
+    </section>
+  </main>
 
-                list.innerHTML = '';
-                data.forEach(srv => {
-                    list.innerHTML += `
-                        <div class="server-card">
-                            <div>
-                                <h3 style="margin:0">${srv.brainrotName}</h3>
-                                <p class="gps">${srv.gps} $/sec</p>
-                                <small style="color:#666">ID: ${srv.jobId.substring(0,15)}...</small>
-                            </div>
-                            <a href="roblox://placeId=${srv.placeId}&gameInstanceId=${srv.jobId}" class="btn-join">JOIN SERVER</a>
-                        </div>
-                    `;
-                });
-            } catch (e) {
-                console.log("En attente de données...");
-            }
-        }
+  <footer class="foot">La lecture utilise la synthèse vocale de votre navigateur : le fichier ne quitte jamais votre appareil.</footer>
 
-        setInterval(fetchServers, 5000);
-        fetchServers();
-    </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
