@@ -15,15 +15,20 @@
 <body>
   <header class="top">
     <h1>Lecteur PDF à voix haute</h1>
-    <p class="sub">Déposez un PDF : son texte s'affiche et peut être lu à voix haute, phrase par phrase.</p>
+    <p class="sub">Choisissez un livre ou ajoutez votre PDF : il est lu à voix haute, sans coupure, et reprend là où vous vous êtes arrêté.</p>
   </header>
 
   <main class="wrap">
+    <section class="library" aria-labelledby="libTitle">
+      <h2 id="libTitle">Bibliothèque</h2>
+      <div id="books" class="books"></div>
+    </section>
+
     <label id="drop" class="drop" for="file">
       <input id="file" type="file" accept="application/pdf,.pdf" hidden>
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg>
-      <strong>Glissez un PDF ici</strong>
-      <span>ou cliquez pour choisir un fichier</span>
+      <strong>Ajouter un PDF</strong>
+      <span>Glissez-le ici ou cliquez pour le choisir. Il sera gardé dans votre bibliothèque.</span>
       <span id="fileName" class="file-name"></span>
     </label>
 
@@ -47,7 +52,11 @@
         <label>Tonalité <output id="pitchOut">1.0</output>
           <input id="pitch" type="range" min="0.5" max="1.5" step="0.1" value="1">
         </label>
+        <label>Expressivité <output id="exprOut">60 %</output>
+          <input id="expr" type="range" min="0" max="1" step="0.05" value="0.6">
+        </label>
       </div>
+      <p id="tip" class="tip" hidden>Astuce : ouvrez ce site dans <strong>Microsoft Edge</strong> pour profiter gratuitement de ses voix « naturelles » (Denise, Henri, Vivienne…), les plus humaines disponibles sans compte.</p>
       <div class="progress"><div id="bar"></div></div>
     </section>
 
@@ -62,7 +71,7 @@
     </section>
   </main>
 
-  <footer class="foot">Les voix IA sont générées directement dans votre navigateur (téléchargées une seule fois, environ 60 Mo) : votre fichier ne quitte jamais votre appareil.</footer>
+  <footer class="foot">Vos PDF restent dans votre navigateur. Les voix IA sont générées sur votre appareil (téléchargées une seule fois, environ 60 Mo).</footer>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="app.js"></script>

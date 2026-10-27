@@ -61,7 +61,7 @@ button {
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 button.ghost { background: transparent; padding: 6px 10px; font-size: .9rem; }
-.settings { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+.settings { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 12px; }
 .settings label { display: grid; gap: 4px; font-size: .85rem; color: var(--muted); }
 select {
   font: inherit; padding: 7px; border-radius: 8px;
@@ -89,7 +89,34 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .editor { width: 100%; min-height: 50vh; color: var(--text); font-family: inherit; resize: vertical; }
 .foot { color: var(--muted); font-size: .8rem; padding-bottom: 32px; }
 
+.tip { margin: 0; font-size: .85rem; color: var(--muted); }
+
+.library { margin-bottom: 20px; }
+.library h2 { margin-bottom: 10px; }
+.books { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.book { position: relative; }
+.book-open {
+  width: 100%; height: 100%; text-align: left; display: grid; gap: 4px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 34px 12px 12px;
+}
+.book-open:hover { border-color: var(--accent); }
+.book.active .book-open { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.book-title { font-weight: 600; overflow-wrap: anywhere; }
+.book-sub, .book-pct { font-size: .8rem; color: var(--muted); }
+.book-progress { height: 4px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: 4px; }
+.book-progress span { display: block; height: 100%; background: var(--accent); }
+.book-del {
+  position: absolute; top: 6px; right: 6px; padding: 0; width: 26px; height: 26px; line-height: 1;
+  border: none; background: transparent; color: var(--muted); font-size: 1.2rem;
+}
+.book-del:hover { color: var(--text); }
+
+@media (max-width: 760px) {
+  .settings { grid-template-columns: 1fr 1fr; }
+}
 @media (max-width: 600px) {
+  /* Sur téléphone, le panneau ne reste pas collé en haut : il masquerait le texte. */
+  .controls { position: static; }
   h1 { font-size: 1.4rem; }
   .settings { grid-template-columns: 1fr; }
 }

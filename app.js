@@ -6,11 +6,12 @@
     drop: $("drop"), file: $("file"), fileName: $("fileName"), status: $("status"),
     play: $("play"), pause: $("pause"), stop: $("stop"), prev: $("prev"), next: $("next"),
     voice: $("voice"), rate: $("rate"), rateOut: $("rateOut"), pitch: $("pitch"), pitchOut: $("pitchOut"),
+    expr: $("expr"), exprOut: $("exprOut"), tip: $("tip"), books: $("books"),
     bar: $("bar"), reader: $("reader"), editor: $("editor"), editToggle: $("editToggle"),
   };
 
   const synth = window.speechSynthesis;
-  let sentences = [];   // [{ text, el }]
+  let sentences = [];   // [{ text, speech, el, paraEnd }]
   let current = 0;
   let playing = false;
   let session = 0;      // invalide les callbacks d'énoncés annulés
@@ -30,59 +31,63 @@
 
   /* ---------- Voix ---------- */
 
-  // Voix neuronales Piper : générées dans le navigateur, gratuites, bien plus naturelles.
+  // Voix neuronales Piper : générées dans le navigateur, gratuites, sans compte.
   const AI_VOICES = [
-    { id: "fr_FR-siwis-medium", label: "Siwis — voix féminine naturelle" },
-    { id: "fr_FR-tom-medium", label: "Tom — voix masculine naturelle" },
-    { id: "fr_FR-upmc-medium", label: "UPMC — voix féminine posée" },
+    { id: "fr_FR-siwis-medium", label: "Siwis — féminine, expressive" },
+    { id: "fr_FR-tom-medium", label: "Tom — masculine" },
+    { id: "fr_FR-upmc-medium", label: "UPMC — féminine, posée" },
   ];
-  const DEFAULT_VOICE = "ia:" + AI_VOICES[0].id;
+  const AI_DEFAULT = "ia:" + AI_VOICES[0].id;
+
+  // Voix neuronales intégrées à certains navigateurs (Edge : « Denise Online (Natural) »…).
+  const isNaturalWebVoice = (v) => /natural|online|neural|premium|enhanced/i.test(v.name);
+  const isFrench = (v) => v.lang.toLowerCase().startsWith("fr");
+  const isEdge = /Edg\//.test(navigator.userAgent);
 
   function loadVoices() {
-    const saved = store.get("voix") || els.voice.value || DEFAULT_VOICE;
+    const voices = synth ? synth.getVoices() : [];
+    const natural = voices.filter((v) => isFrench(v) && isNaturalWebVoice(v));
+    const others = voices.filter((v) => !natural.includes(v)).sort((a, b) =>
+      (isFrench(a) ? 0 : 1) - (isFrench(b) ? 0 : 1) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    const previous = store.get("voix") || els.voice.value;
     els.voice.innerHTML = "";
 
-    const aiGroup = document.createElement("optgroup");
-    aiGroup.label = "Voix IA naturelles (recommandé)";
-    for (const v of AI_VOICES) aiGroup.appendChild(new Option(v.label, "ia:" + v.id));
-    els.voice.appendChild(aiGroup);
-
-    const voices = synth ? synth.getVoices() : [];
-    if (voices.length) {
-      const sorted = [...voices].sort((a, b) => {
-        const fa = a.lang.toLowerCase().startsWith("fr") ? 0 : 1;
-        const fb = b.lang.toLowerCase().startsWith("fr") ? 0 : 1;
-        return fa - fb || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name);
-      });
-      const webGroup = document.createElement("optgroup");
-      webGroup.label = "Voix du navigateur (instantanées)";
-      for (const v of sorted) webGroup.appendChild(new Option(`${v.name} (${v.lang})`, "web:" + v.voiceURI));
-      els.voice.appendChild(webGroup);
-    }
+    const group = (label, items) => {
+      if (!items.length) return;
+      const g = document.createElement("optgroup");
+      g.label = label;
+      for (const [text, value] of items) g.appendChild(new Option(text, value));
+      els.voice.appendChild(g);
+    };
+    group("Voix naturelles du navigateur (les plus humaines)",
+      natural.map((v) => [v.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*French.*$/, ""), "web:" + v.voiceURI]));
+    group("Voix IA gratuites (fonctionnent partout)", AI_VOICES.map((v) => [v.label, "ia:" + v.id]));
+    group("Autres voix du navigateur", others.map((v) => [`${v.name} (${v.lang})`, "web:" + v.voiceURI]));
 
     const values = [...els.voice.options].map((o) => o.value);
-    els.voice.value = values.includes(saved) ? saved : DEFAULT_VOICE;
-    syncPitch();
+    els.voice.value = values.includes(previous) ? previous : (natural.length ? "web:" + natural[0].voiceURI : AI_DEFAULT);
+    // Sans voix naturelle disponible, on signale qu'Edge en propose gratuitement.
+    els.tip.hidden = natural.length > 0 || isEdge;
+    syncSettings();
   }
 
   const isAiVoice = () => els.voice.value.startsWith("ia:");
   const aiVoiceId = () => els.voice.value.slice(3);
   const selectedWebVoice = () => synth?.getVoices().find((v) => "web:" + v.voiceURI === els.voice.value);
 
-  loadVoices();
-  synth?.addEventListener?.("voiceschanged", loadVoices);
-
-  // La tonalité n'est réglable qu'avec les voix du navigateur.
-  function syncPitch() {
-    const off = isAiVoice();
-    els.pitch.disabled = off;
-    els.pitch.closest("label").classList.toggle("off", off);
+  // Tonalité : voix du navigateur uniquement. Expressivité : voix IA uniquement.
+  function syncSettings() {
+    const ia = isAiVoice();
+    els.pitch.disabled = ia;
+    els.pitch.closest("label").classList.toggle("off", ia);
+    els.expr.disabled = !ia;
+    els.expr.closest("label").classList.toggle("off", !ia);
   }
 
   /* ---------- Moteur IA (Piper) ---------- */
 
   const ORT_DIST = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
-  const PIPER_URL = "https://cdn.jsdelivr.net/npm/@mintplex-labs/piper-tts-web@1.0.5/dist/piper-tts-web.js";
+  const PIPER_URL = new URL("vendor/piper/piper-tts-web.js", document.baseURI).href;
 
   const ai = {
     lib: null,
@@ -90,8 +95,8 @@
     voiceId: null,
     loading: null,
     queue: Promise.resolve(),
-    gen: 0,           // invalide les générations en attente quand le texte ou la voix change
-    cache: new Map(), // index de phrase -> Promise<URL audio>
+    gen: 0,           // invalide les générations en attente quand le texte, la voix ou un réglage change
+    cache: new Map(), // index de phrase -> Promise<AudioBuffer>
   };
 
   // Charge (ou change) la voix IA ; le modèle est mis en cache par le navigateur après le 1er téléchargement.
@@ -121,17 +126,46 @@
     return ai.loading;
   }
 
+  // Expressivité 0 → 1 : variations de mélodie (noise) et de rythme (noise_w) du modèle.
+  function aiScales() {
+    const e = +els.expr.value;
+    return { noiseScale: 0.45 + e * 0.55, noiseW: 0.6 + e * 0.6, lengthFactor: 1 / +els.rate.value };
+  }
+
+  let audioCtx = null;
+  const getAudioCtx = () => (audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)());
+
+  // Retire les silences de début et de fin : c'est le lecteur qui gère les pauses entre phrases.
+  function trimSilence(buf) {
+    const data = buf.getChannelData(0);
+    const threshold = 0.012;
+    const margin = Math.round(buf.sampleRate * 0.02);
+    let a = 0;
+    let b = data.length - 1;
+    while (a < b && Math.abs(data[a]) < threshold) a++;
+    while (b > a && Math.abs(data[b]) < threshold) b--;
+    a = Math.max(0, a - margin);
+    b = Math.min(data.length, b + margin);
+    if (b - a < 10) return buf;
+    const out = getAudioCtx().createBuffer(1, b - a, buf.sampleRate);
+    out.copyToChannel(data.subarray(a, b), 0);
+    return out;
+  }
+
   // Génère l'audio d'une phrase ; les générations passent une par une dans une file.
   function synthesize(i) {
     if (ai.cache.has(i)) return ai.cache.get(i);
     const voiceId = aiVoiceId();
     const text = sentences[i].speech;
+    const scales = aiScales();
     const gen = ai.gen;
     const job = ai.queue.then(async () => {
       if (gen !== ai.gen) throw new Error("annulé");
       const tts = await loadAiVoice(voiceId);
+      tts.scales = scales;
       const wav = await tts.predict(text);
-      return URL.createObjectURL(wav);
+      const buf = await getAudioCtx().decodeAudioData(await wav.arrayBuffer());
+      return trimSilence(buf);
     });
     ai.queue = job.catch(() => {});
     ai.cache.set(i, job);
@@ -140,13 +174,9 @@
   }
 
   function clearAiCache() {
-    for (const p of ai.cache.values()) p.then((url) => URL.revokeObjectURL(url), () => {});
     ai.cache.clear();
     ai.gen++;
   }
-
-  const audio = new Audio();
-  audio.preservesPitch = true;
 
   /* ---------- Réglages ---------- */
 
@@ -155,19 +185,25 @@
     if (saved) input.value = saved;
     const sync = () => { out.textContent = fmt(+input.value); store.set(key, input.value); };
     input.addEventListener("input", sync);
-    input.addEventListener("change", () => { if (!isAiVoice()) restartIfPlaying(); });
+    input.addEventListener("change", () => {
+      if (isAiVoice()) clearAiCache();
+      restartIfPlaying();
+    });
     sync();
   }
   initRange(els.rate, els.rateOut, "vitesse", (v) => v.toFixed(1) + "×");
   initRange(els.pitch, els.pitchOut, "tonalite", (v) => v.toFixed(1));
+  initRange(els.expr, els.exprOut, "expressivite", (v) => Math.round(v * 100) + " %");
+
+  loadVoices();
+  synth?.addEventListener?.("voiceschanged", loadVoices);
+
   els.voice.addEventListener("change", () => {
     store.set("voix", els.voice.value);
     clearAiCache();
-    syncPitch();
+    syncSettings();
     restartIfPlaying();
   });
-  // Avec la voix IA, la vitesse s'applique en direct sans relancer la phrase.
-  els.rate.addEventListener("input", () => { audio.playbackRate = +els.rate.value; });
 
   function restartIfPlaying() {
     if (playing) speakFrom(current);
@@ -376,14 +412,15 @@
       }
       for (const para of page.paragraphs) {
         const p = document.createElement("p");
-        for (const s of splitSentences(para)) {
+        const parts = splitSentences(para);
+        parts.forEach((s, k) => {
           const span = document.createElement("span");
           span.className = "s";
           span.textContent = s;
           span.dataset.i = sentences.length;
-          sentences.push({ text: s.trim(), speech: speechText(s), el: span });
+          sentences.push({ text: s.trim(), speech: speechText(s), el: span, paraEnd: k === parts.length - 1 });
           p.appendChild(span);
-        }
+        });
         els.reader.appendChild(p);
       }
     }
@@ -424,7 +461,9 @@
   /* ---------- Marque-page ---------- */
 
   function savePosition() {
-    if (docKey) store.set(docKey, String(current));
+    if (!docKey) return;
+    store.set(docKey, String(current));
+    if (currentBook) store.set("progres:" + currentBook.id, JSON.stringify({ pos: current, total: sentences.length }));
   }
 
   function restorePosition() {
@@ -445,17 +484,34 @@
     if (!sentences.length) return;
     current = Math.max(0, Math.min(i, sentences.length - 1));
     const id = ++session;
-    synth?.cancel();
-    audio.pause();
+    silence();
     playing = true;
     updateUi();
-    speakCurrent(id);
+    if (isAiVoice()) playAi(id, current);
+    else playWeb(id, current);
+  }
+
+  // Coupe tout ce qui est en cours ou programmé.
+  function silence() {
+    synth?.cancel();
+    for (const src of scheduled) { try { src.stop(); } catch { /* déjà arrêtée */ } }
+    scheduled = [];
+  }
+
+  function onSentenceStart(id, i) {
+    if (id !== session) return;
+    current = i;
+    highlight(i);
+    savePosition();
+    setStatus(`Lecture… phrase ${i + 1} / ${sentences.length}`);
   }
 
   function finished() {
     playing = false;
     current = 0;
     savePosition();
+    if (currentBook) store.set("progres:" + currentBook.id, JSON.stringify({ pos: sentences.length, total: sentences.length }));
+    renderLibrary();
     highlight(-1);
     els.bar.style.width = "100%";
     setStatus("Lecture terminée.");
@@ -464,67 +520,104 @@
 
   function failed(msg) {
     playing = false;
+    silence();
     setStatus(msg);
     updateUi();
   }
 
-  function speakCurrent(id) {
-    if (id !== session) return;
-    if (current >= sentences.length) return finished();
-    if (!sentences[current].speech) { current++; return speakCurrent(id); }
-    highlight(current);
-    savePosition();
-    if (isAiVoice()) speakAi(id);
-    else speakWeb(id);
+  // Pause naturelle après une phrase, selon la ponctuation et la fin de paragraphe.
+  function pauseAfter(i) {
+    const s = sentences[i];
+    const rate = +els.rate.value;
+    let p;
+    if (s.paraEnd) p = 0.55;
+    else if (/[.!?…][»”"')\s]*$/.test(s.text)) p = 0.28;
+    else if (/[,;:][»”"')\s]*$/.test(s.text)) p = 0.15;
+    else p = 0.04; // phrase longue coupée en deux : on enchaîne
+    return p / rate;
   }
 
-  async function speakAi(id) {
-    const i = current;
-    const pending = synthesize(i);
-    // Prépare les deux phrases suivantes pendant la lecture de celle-ci.
-    for (let k = i + 1; k <= i + 2 && k < sentences.length; k++) synthesize(k);
-    let url;
-    try {
-      url = await pending;
-    } catch (err) {
+  /* Voix IA : les phrases sont programmées bout à bout dans le moteur audio, sans blanc entre elles. */
+
+  let scheduled = [];
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function playAi(id, from) {
+    const ctx = getAudioCtx();
+    try { await ctx.resume(); } catch { /* reprise impossible : la lecture échouera plus bas */ }
+    let t = 0; // heure de fin de la dernière phrase programmée (horloge audio)
+    for (let i = from; i < sentences.length; i++) {
       if (id !== session) return;
-      console.error(err);
-      return failed("Impossible de charger la voix IA. Vérifiez votre connexion ou choisissez une voix du navigateur.");
+      if (!sentences[i].speech) continue;
+      let buf;
+      try {
+        buf = await synthesize(i);
+      } catch (err) {
+        if (id !== session) return;
+        console.error(err);
+        return failed("Impossible de charger la voix IA. Vérifiez votre connexion ou choisissez une autre voix.");
+      }
+      // Prépare les phrases suivantes pendant la lecture.
+      for (let k = i + 1; k <= i + 3 && k < sentences.length; k++) if (sentences[k].speech) synthesize(k);
+      if (id !== session) return;
+      // Pas plus de quelques secondes d'avance programmée : pause et arrêt restent instantanés.
+      while (t && t - ctx.currentTime > 4) {
+        await wait(200);
+        if (id !== session) return;
+      }
+      const startAt = Math.max(t, ctx.currentTime + 0.05);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(startAt);
+      scheduled.push(src);
+      src.onended = () => { scheduled = scheduled.filter((s) => s !== src); };
+      setTimeout(() => onSentenceStart(id, i), Math.max(0, (startAt - ctx.currentTime) * 1000));
+      t = startAt + buf.duration + pauseAfter(i);
     }
-    if (id !== session) return;
-    setStatus(`Lecture… phrase ${i + 1} / ${sentences.length}`);
-    audio.src = url;
-    audio.playbackRate = +els.rate.value;
-    audio.onended = () => { if (id === session) { current++; speakCurrent(id); } };
-    audio.onerror = () => { if (id === session) failed("Erreur de lecture audio."); };
-    try {
-      await audio.play();
-    } catch (err) {
-      if (id === session && err.name !== "AbortError") failed("Lecture bloquée par le navigateur : cliquez sur « Lire ».");
-    }
+    setTimeout(() => { if (id === session) finished(); }, Math.max(0, (t - ctx.currentTime) * 1000));
   }
 
-  function speakWeb(id) {
+  /* Voix du navigateur : on met plusieurs phrases en file d'attente pour qu'elles s'enchaînent. */
+
+  function playWeb(id, from) {
     if (!synth) return failed("Votre navigateur ne prend pas en charge la synthèse vocale. Choisissez une voix IA.");
-    const u = new SpeechSynthesisUtterance(sentences[current].speech);
-    const v = selectedWebVoice();
-    if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "fr-FR"; }
-    u.rate = +els.rate.value;
-    u.pitch = +els.pitch.value;
-    u.onend = () => { if (id === session) { current++; speakCurrent(id); } };
-    u.onerror = (e) => {
-      if (id !== session || e.error === "interrupted" || e.error === "canceled") return;
-      failed("Erreur de synthèse vocale : " + e.error);
+    let next = from;
+    let queued = 0;
+    const enqueue = () => {
+      while (next < sentences.length && !sentences[next].speech) next++;
+      if (next >= sentences.length) return;
+      const i = next++;
+      const u = new SpeechSynthesisUtterance(sentences[i].speech);
+      const v = selectedWebVoice();
+      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "fr-FR"; }
+      u.rate = +els.rate.value;
+      u.pitch = +els.pitch.value;
+      u.onstart = () => onSentenceStart(id, i);
+      u.onend = () => {
+        if (id !== session) return;
+        queued--;
+        enqueue();
+        if (queued === 0) finished();
+      };
+      u.onerror = (e) => {
+        if (id !== session || e.error === "interrupted" || e.error === "canceled") return;
+        failed("Erreur de synthèse vocale : " + e.error);
+      };
+      queued++;
+      synth.speak(u);
     };
-    setStatus(`Lecture… phrase ${current + 1} / ${sentences.length}`);
-    // Petit délai : évite que Chrome ignore un énoncé lancé juste après cancel().
-    setTimeout(() => { if (id === session) synth.speak(u); }, 30);
+    // Petit délai : évite que Chrome ignore des énoncés lancés juste après cancel().
+    setTimeout(() => {
+      if (id !== session) return;
+      for (let k = 0; k < 3; k++) enqueue();
+      if (queued === 0) finished();
+    }, 30);
   }
 
   function pauseReading() {
     session++;
-    synth?.cancel();
-    audio.pause();
+    silence();
     playing = false;
     setStatus(`En pause à la phrase ${current + 1} / ${sentences.length}.`);
     updateUi();
@@ -532,8 +625,7 @@
 
   function stopReading() {
     session++;
-    synth?.cancel();
-    audio.pause();
+    silence();
     playing = false;
     current = 0;
     if (sentences.length) highlight(-1);
@@ -548,7 +640,7 @@
   els.next.addEventListener("click", () => playing ? speakFrom(current + 1) : (current = Math.min(sentences.length - 1, current + 1), highlight(current), updateUi()));
 
   document.addEventListener("keydown", (e) => {
-    if (e.target.matches("input, textarea, select")) return;
+    if (e.target.matches("input, textarea, select, button")) return;
     if (e.code === "Space" && sentences.length) {
       e.preventDefault();
       playing ? pauseReading() : speakFrom(current);
@@ -556,6 +648,132 @@
   });
 
   window.addEventListener("beforeunload", () => synth?.cancel());
+
+  /* ---------- Bibliothèque ---------- */
+
+  // Livres fournis avec le site.
+  const BUILTIN_BOOKS = [
+    { id: "livre:la-venus-d-ille", title: "La Vénus d'Ille", author: "Prosper Mérimée", url: "livres/la-venus-d-ille.pdf" },
+  ];
+  const MAX_STORED = 15;
+  let currentBook = null;
+
+  // Les PDF importés sont gardés dans le navigateur (IndexedDB) pour être rouverts en un clic.
+  const db = {
+    open() {
+      if (!this.p) {
+        this.p = new Promise((resolve, reject) => {
+          const req = indexedDB.open("lecteur-pdf", 1);
+          req.onupgradeneeded = () => req.result.createObjectStore("pdfs", { keyPath: "id" });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+      return this.p;
+    },
+    async run(mode, fn) {
+      const conn = await this.open();
+      return new Promise((resolve, reject) => {
+        const tx = conn.transaction("pdfs", mode);
+        const req = fn(tx.objectStore("pdfs"));
+        tx.oncomplete = () => resolve(req?.result);
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+    all() { return this.run("readonly", (s) => s.getAll()); },
+    put(rec) { return this.run("readwrite", (s) => s.put(rec)); },
+    del(id) { return this.run("readwrite", (s) => s.delete(id)); },
+  };
+
+  const progressOf = (id) => {
+    try { return JSON.parse(store.get("progres:" + id)) || null; } catch { return null; }
+  };
+
+  async function storedBooks() {
+    try {
+      return (await db.all()).sort((a, b) => b.openedAt - a.openedAt);
+    } catch {
+      return [];
+    }
+  }
+
+  async function renderLibrary() {
+    const stored = await storedBooks();
+    els.books.innerHTML = "";
+    const card = (book, sub, removable) => {
+      const wrap = document.createElement("div");
+      wrap.className = "book" + (book.id === currentBook?.id ? " active" : "");
+      const open = document.createElement("button");
+      open.className = "book-open";
+      const prog = progressOf(book.id);
+      const pct = prog && prog.total ? Math.round((prog.pos / prog.total) * 100) : 0;
+      open.innerHTML = `<span class="book-title"></span><span class="book-sub"></span>
+        <span class="book-progress"><span style="width:${pct}%"></span></span>
+        <span class="book-pct">${pct ? (pct >= 100 ? "Terminé" : pct + " % lu") : "Pas encore commencé"}</span>`;
+      open.querySelector(".book-title").textContent = book.title || book.name;
+      open.querySelector(".book-sub").textContent = sub;
+      open.addEventListener("click", () => openBook(book));
+      wrap.appendChild(open);
+      if (removable) {
+        const del = document.createElement("button");
+        del.className = "book-del";
+        del.title = "Retirer de la bibliothèque";
+        del.setAttribute("aria-label", `Retirer ${book.name} de la bibliothèque`);
+        del.textContent = "×";
+        del.addEventListener("click", async () => {
+          await db.del(book.id).catch(() => {});
+          renderLibrary();
+        });
+        wrap.appendChild(del);
+      }
+      els.books.appendChild(wrap);
+    };
+    for (const b of BUILTIN_BOOKS) card(b, `${b.author} · inclus`, false);
+    for (const b of stored) card(b, "Mon PDF · " + new Date(b.openedAt).toLocaleDateString("fr-FR"), true);
+  }
+
+  async function openBook(book) {
+    if (!window.pdfjsLib) {
+      setStatus("Impossible de charger le moteur PDF. Vérifiez votre connexion.");
+      return;
+    }
+    let blob = book.blob;
+    if (!blob) {
+      setStatus("Ouverture du livre…");
+      try {
+        const res = await fetch(book.url);
+        if (!res.ok) throw new Error(res.status);
+        blob = await res.blob();
+      } catch {
+        setStatus("Impossible d'ouvrir ce livre.");
+        return;
+      }
+    }
+    currentBook = book;
+    els.fileName.textContent = book.title || book.name;
+    closeEditor(false);
+    stopReading();
+    try {
+      const pages = await extractPdf(blob);
+      render(pages);
+      docKey = `marque-page:${book.id}:${sentences.length}`;
+      if (book.blob) db.put({ ...book, openedAt: Date.now() }).catch(() => {});
+      renderLibrary();
+      if (!sentences.length) return setStatus("Aucun texte trouvé dans ce PDF.");
+      const ready = restorePosition()
+        ? `Marque-page retrouvé : reprise à la phrase ${current + 1} / ${sentences.length}. Cliquez sur « Reprendre ».`
+        : `${sentences.length} phrases prêtes. Cliquez sur « Lire ».`;
+      setStatus(ready);
+      document.querySelector(".controls").scrollIntoView({ behavior: "smooth", block: "start" });
+      // Prépare la voix IA et la 1re phrase en avance pour un démarrage immédiat.
+      if (isAiVoice()) synthesize(current).then(() => { if (!playing) setStatus(ready); }, () => {});
+    } catch (err) {
+      console.error(err);
+      setStatus(err?.name === "PasswordException"
+        ? "Ce PDF est protégé par un mot de passe."
+        : "Impossible de lire ce PDF.");
+    }
+  }
 
   /* ---------- Chargement du fichier ---------- */
 
@@ -565,31 +783,14 @@
       setStatus("Ce fichier n'est pas un PDF.");
       return;
     }
-    if (!window.pdfjsLib) {
-      setStatus("Impossible de charger le moteur PDF. Vérifiez votre connexion.");
-      return;
-    }
-    els.fileName.textContent = file.name;
-    closeEditor(false);
+    const book = { id: `pdf:${file.name}:${file.size}`, name: file.name, title: file.name.replace(/\.pdf$/i, ""), blob: file, openedAt: Date.now() };
     try {
-      const pages = await extractPdf(file);
-      render(pages);
-      docKey = `marque-page:${file.name}:${sentences.length}`;
-      if (sentences.length) {
-        const ready = restorePosition()
-          ? `Marque-page retrouvé : reprise à la phrase ${current + 1} / ${sentences.length}. Cliquez sur « Reprendre ».`
-          : `${sentences.length} phrases prêtes. Cliquez sur « Lire ».`;
-        setStatus(ready);
-        // Prépare la voix IA et la 1re phrase en avance pour un démarrage immédiat.
-        if (isAiVoice()) synthesize(current).then(() => { if (!playing) setStatus(ready); }, () => {});
-      }
-      else setStatus("Aucun texte trouvé dans ce PDF.");
-    } catch (err) {
-      console.error(err);
-      setStatus(err?.name === "PasswordException"
-        ? "Ce PDF est protégé par un mot de passe."
-        : "Impossible de lire ce PDF.");
-    }
+      await db.put(book);
+      // Garde la bibliothèque raisonnable : on retire les PDF les plus anciens.
+      const all = await storedBooks();
+      for (const old of all.slice(MAX_STORED)) await db.del(old.id);
+    } catch { /* stockage indisponible : le PDF s'ouvre quand même */ }
+    openBook(book);
   }
 
   els.file.addEventListener("change", () => handleFile(els.file.files[0]));
@@ -625,6 +826,7 @@
         .map((p) => p.replace(/\s+/g, " ").trim())
         .filter(Boolean);
       docKey = null;
+      currentBook = null;
       render([{ label: "", paragraphs }]);
       setStatus(sentences.length ? `${sentences.length} phrases prêtes.` : "");
     }
@@ -635,5 +837,6 @@
 
   els.editToggle.addEventListener("click", () => els.editor.hidden ? openEditor() : closeEditor(true));
 
+  renderLibrary();
   updateUi();
 })();
