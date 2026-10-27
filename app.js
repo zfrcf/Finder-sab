@@ -14,6 +14,7 @@
   let current = 0;
   let playing = false;
   let session = 0;      // invalide les callbacks d'énoncés annulés
+  let docKey = null;    // identifie le document pour reprendre la lecture où on l'avait laissée
 
   if (window.pdfjsLib) {
     pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -124,7 +125,7 @@
   function synthesize(i) {
     if (ai.cache.has(i)) return ai.cache.get(i);
     const voiceId = aiVoiceId();
-    const text = sentences[i].text;
+    const text = sentences[i].speech;
     const gen = ai.gen;
     const job = ai.queue.then(async () => {
       if (gen !== ai.gen) throw new Error("annulé");
@@ -174,6 +175,8 @@
 
   /* ---------- Extraction PDF ---------- */
 
+  const HYPHEN = "\u0000"; // marque une coupure de mot en fin de ligne, résolue après lecture du document entier
+
   async function extractPdf(file) {
     const data = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjsLib.getDocument({ data }).promise;
@@ -184,8 +187,11 @@
       const content = await page.getTextContent();
       pages.push({ label: `Page ${n}`, paragraphs: itemsToParagraphs(content.items) });
     }
-    return pages;
+    return cleanDocument(pages);
   }
+
+  // Lignes parasites : numéros de page (« – 3 – », « 12 », « Page 4 »).
+  const isPageNumber = (t) => /^(?:[–—-]\s*)?(?:page\s*)?\d{1,4}(?:\s*[–—-])?$/i.test(t);
 
   // Regroupe les fragments de texte en lignes, puis en paragraphes selon l'écart vertical.
   function itemsToParagraphs(items) {
@@ -213,19 +219,103 @@
     let prevY = null;
     for (const l of lines) {
       const t = l.text.replace(/\s+/g, " ").trim();
+      if (isPageNumber(t)) continue;
       const bigGap = median && prevY !== null && l.y !== null && Math.abs(prevY - l.y) > median * 1.6;
       if (!t || bigGap) {
         if (buf.trim()) paragraphs.push(buf.trim());
         buf = "";
       }
-      if (t) {
-        // Recolle les mots coupés en fin de ligne (« exem- ple »).
-        buf = /[A-Za-zÀ-ÿ]-$/.test(buf) ? buf.slice(0, -1) + t : (buf ? buf + " " + t : t);
-      }
+      if (t) buf = joinLine(buf, t);
       if (l.y !== null) prevY = l.y;
     }
     if (buf.trim()) paragraphs.push(buf.trim());
     return paragraphs;
+  }
+
+  // Recolle une ligne à la précédente ; un mot coupé (« vête- ») est marqué pour être résolu plus tard.
+  function joinLine(buf, t) {
+    if (!buf) return t;
+    if (/[A-Za-zÀ-ÿ]-$/.test(buf) && /^[a-zà-ÿ]/.test(t)) return buf.slice(0, -1) + HYPHEN + t;
+    return buf + " " + t;
+  }
+
+  function cleanDocument(pages) {
+    // 1. Recoller les paragraphes coupés par un changement de page.
+    let last = null; // { page, index }
+    for (const page of pages) {
+      while (page.paragraphs.length && last) {
+        const prev = last.page.paragraphs[last.index];
+        const first = page.paragraphs[0];
+        const unfinished = !/[.!?…»:;)”"]$/.test(prev) || /[A-Za-zÀ-ÿ]-$/.test(prev);
+        if (!unfinished || !/^[a-zà-ÿ«“"(]/.test(first)) break;
+        last.page.paragraphs[last.index] = joinLine(prev, first);
+        page.paragraphs.shift();
+      }
+      if (page.paragraphs.length) last = { page, index: page.paragraphs.length - 1 };
+    }
+
+    // 2. Mots coupés : « vête-ments » → « vêtements », mais « après-demain » garde son tiret.
+    const all = pages.flatMap((p) => p.paragraphs).join(" ");
+    // Le vocabulaire ne compte que les mots entiers (pas les morceaux de mots coupés).
+    const words = new Set(all.replace(new RegExp(`\\S*${HYPHEN}\\S*`, "g"), " ").toLowerCase().match(/[a-zà-ÿœæ]+(?:-[a-zà-ÿœæ]+)*/g) || []);
+    const resolve = (txt) => txt.replace(new RegExp(`([A-Za-zÀ-ÿœæ]+)${HYPHEN}([a-zà-ÿœæ]+)`, "g"), (m, a, b) => {
+      const joined = (a + b).toLowerCase();
+      if (words.has(joined)) return a + b;
+      if (words.has((a + "-" + b).toLowerCase())) return a + "-" + b;
+      if (b.length > 1 && words.has(a.toLowerCase()) && words.has(b)) return a + "-" + b;
+      return a + b;
+    });
+
+    for (const page of pages) {
+      page.paragraphs = page.paragraphs
+        .map((p) => resolve(p)
+          .replace(new RegExp(HYPHEN, "g"), "")
+          // Points de conduite des tables des matières : « Chapitre ........ 3 ».
+          .replace(/\s*\.{4,}\s*/g, " … ")
+          .replace(/\s+/g, " ")
+          .trim())
+        .filter(Boolean);
+    }
+    return pages;
+  }
+
+  /* ---------- Texte prononcé ---------- */
+
+  // Ce qui est affiché reste fidèle au PDF ; seul le texte envoyé à la voix est adapté.
+  const ABBREVIATIONS = [
+    [/\bP\.\s?S\./g, "post-scriptum"],
+    [/\bMM\.(?=\s)/g, "messieurs"],
+    [/\bM\.(?=\s+[A-ZÀ-Ýa-z])/g, "monsieur"],
+    [/\bMmes\b\.?/g, "mesdames"],
+    [/\bMme\b\.?/g, "madame"],
+    [/\bMlles\b\.?/g, "mesdemoiselles"],
+    [/\bMlle\b\.?/g, "mademoiselle"],
+    [/\bDr\b\.?(?=\s)/g, "docteur"],
+    [/\bSt(e?)\b\.?(?=[\s-])/g, (m, e) => (e ? "sainte" : "saint")],
+    [/\bp\.\s?(?=\d)/g, "page "],
+    [/\betc\./g, "et cetera."],
+    [/\bcf\./gi, "voir"],
+    [/\bn°\s?/gi, "numéro "],
+  ];
+
+  function speechText(text) {
+    let t = text;
+    for (const [re, rep] of ABBREVIATIONS) t = t.replace(re, rep);
+    return t
+      .replace(/https?:\/\/\S+|www\.\S+/g, "lien")
+      // Mots en capitales (titres, inscriptions) : lus comme des mots, pas épelés.
+      .replace(/\b[A-ZÀ-Ý]{2,}\b/g, (w) => {
+        let x = w.toLowerCase();
+        // Inscriptions latines : V tient lieu de U devant une consonne ou en fin de mot (TVRBVL → turbul).
+        if (/V/.test(w) && !/U/.test(w)) x = x.replace(/v(?=[^aeiouy]|$)/g, "u");
+        return x;
+      })
+      .replace(/^[\s–—-]+/, "")
+      // Tirets de dialogue au milieu d'une phrase : simple pause.
+      .replace(/([.!?…:;,])?\s[–—]\s/g, (m, punct) => (punct ? punct + " " : ", "))
+      .replace(/[«»“”"]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   /* ---------- Découpage en phrases ---------- */
@@ -235,10 +325,21 @@
     : null;
 
   function splitSentences(text) {
-    const raw = segmenter
+    const segs = segmenter
       ? [...segmenter.segment(text)].map((s) => s.segment)
       : text.match(/[^.!?…]+[.!?…]+["»”)]*\s*|[^.!?…]+$/g) || [text];
-    // Chrome coupe les énoncés trop longs : on fragmente au-delà de ~220 caractères.
+    // Recolle les faux départs : « ? dis-je », « » » isolé, « M. », « P. S. »…
+    const raw = [];
+    for (const seg of segs) {
+      const head = seg.replace(/^[\s«»“”"–—-]+/, "");
+      const prev = raw[raw.length - 1];
+      if (prev !== undefined && (!/[A-Za-zÀ-ÿ0-9]/.test(seg) || /^[a-zà-ÿ]/.test(head) || prev.trim().length <= 3)) {
+        raw[raw.length - 1] = prev + seg;
+      } else {
+        raw.push(seg);
+      }
+    }
+    // Les énoncés trop longs passent mal : on fragmente au-delà de ~220 caractères.
     const out = [];
     for (const s of raw) {
       if (!s.trim()) continue;
@@ -280,7 +381,7 @@
           span.className = "s";
           span.textContent = s;
           span.dataset.i = sentences.length;
-          sentences.push({ text: s.trim(), el: span });
+          sentences.push({ text: s.trim(), speech: speechText(s), el: span });
           p.appendChild(span);
         }
         els.reader.appendChild(p);
@@ -320,6 +421,24 @@
     els.play.textContent = current > 0 && !playing ? "▶ Reprendre" : "▶ Lire";
   }
 
+  /* ---------- Marque-page ---------- */
+
+  function savePosition() {
+    if (docKey) store.set(docKey, String(current));
+  }
+
+  function restorePosition() {
+    const saved = docKey ? +store.get(docKey) : 0;
+    if (saved > 0 && saved < sentences.length) {
+      current = saved;
+      highlight(current);
+      els.bar.style.width = (current / sentences.length) * 100 + "%";
+      updateUi();
+      return true;
+    }
+    return false;
+  }
+
   /* ---------- Lecture ---------- */
 
   function speakFrom(i) {
@@ -336,6 +455,7 @@
   function finished() {
     playing = false;
     current = 0;
+    savePosition();
     highlight(-1);
     els.bar.style.width = "100%";
     setStatus("Lecture terminée.");
@@ -351,7 +471,9 @@
   function speakCurrent(id) {
     if (id !== session) return;
     if (current >= sentences.length) return finished();
+    if (!sentences[current].speech) { current++; return speakCurrent(id); }
     highlight(current);
+    savePosition();
     if (isAiVoice()) speakAi(id);
     else speakWeb(id);
   }
@@ -384,7 +506,7 @@
 
   function speakWeb(id) {
     if (!synth) return failed("Votre navigateur ne prend pas en charge la synthèse vocale. Choisissez une voix IA.");
-    const u = new SpeechSynthesisUtterance(sentences[current].text);
+    const u = new SpeechSynthesisUtterance(sentences[current].speech);
     const v = selectedWebVoice();
     if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "fr-FR"; }
     u.rate = +els.rate.value;
@@ -421,7 +543,7 @@
 
   els.play.addEventListener("click", () => speakFrom(current));
   els.pause.addEventListener("click", pauseReading);
-  els.stop.addEventListener("click", () => { stopReading(); setStatus("Lecture arrêtée."); });
+  els.stop.addEventListener("click", () => { stopReading(); savePosition(); setStatus("Lecture arrêtée."); });
   els.prev.addEventListener("click", () => playing ? speakFrom(current - 1) : (current = Math.max(0, current - 1), highlight(current), updateUi()));
   els.next.addEventListener("click", () => playing ? speakFrom(current + 1) : (current = Math.min(sentences.length - 1, current + 1), highlight(current), updateUi()));
 
@@ -452,10 +574,14 @@
     try {
       const pages = await extractPdf(file);
       render(pages);
+      docKey = `marque-page:${file.name}:${sentences.length}`;
       if (sentences.length) {
-        setStatus(`${sentences.length} phrases prêtes. Cliquez sur « Lire ».`);
+        const ready = restorePosition()
+          ? `Marque-page retrouvé : reprise à la phrase ${current + 1} / ${sentences.length}. Cliquez sur « Reprendre ».`
+          : `${sentences.length} phrases prêtes. Cliquez sur « Lire ».`;
+        setStatus(ready);
         // Prépare la voix IA et la 1re phrase en avance pour un démarrage immédiat.
-        if (isAiVoice()) synthesize(0).then(() => { if (!playing) setStatus(`${sentences.length} phrases prêtes. Cliquez sur « Lire ».`); }, () => {});
+        if (isAiVoice()) synthesize(current).then(() => { if (!playing) setStatus(ready); }, () => {});
       }
       else setStatus("Aucun texte trouvé dans ce PDF.");
     } catch (err) {
@@ -498,6 +624,7 @@
         .split(/\n\s*\n/)
         .map((p) => p.replace(/\s+/g, " ").trim())
         .filter(Boolean);
+      docKey = null;
       render([{ label: "", paragraphs }]);
       setStatus(sentences.length ? `${sentences.length} phrases prêtes.` : "");
     }
